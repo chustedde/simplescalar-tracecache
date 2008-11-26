@@ -1,3 +1,4 @@
+/*Project of Christina Hustedde, Gergana Petrova, Tscharner Upjohn*/
 /* sim-outorder.c - sample out-of-order issue perf simulator implementation */
 
 /* SimpleScalar(TM) Tool Suite

@@ -51,7 +51,7 @@
 
 /*TU*/
 #define TRACE_RATIO 			8
-#define INSTR_PER_TRACE 	8
+#define INSTS_PER_TRACE 	8
 #define TRACE_CACHE_SIZE	32
 
 #include <stdio.h>
@@ -86,13 +86,10 @@
  * pipeline operations.
  */
 
-/*trace cache array TU*/
-static struct TraceCache *TC;
-
 //This was created by Mali, student from UCF//
 static struct TraceCache
 {
-    bool valid;			//Specifies if this cache line is valid//
+    int valid;			//Specifies if this cache line is valid//
     unsigned int tag;		//Stores the tag (tag of the first PC)//
     unsigned int *flags;	//Stores 1 or 0 (Taken or Not Taken) for branch//
     unsigned int mask;		//Specifies # of branches, and if last instr is branch//	
@@ -102,17 +99,19 @@ static struct TraceCache
     unsigned int *pc;		//The PCs of each instruction//
     unsigned int *b_pc;		//The PCs of branch instructions//
     unsigned int *pred_tag;	//???//
-    bool last_taken;		//??If last instr is branch, is it taken or not taken//
+    int last_taken;		//??If last instr is branch, is it taken or not taken//
 };
 
+/*trace cache array TU*/
+static struct TraceCache *tc;
 
 /*trace setting variables TU*/
-static int trace_being_formed;  		//0 not building trace, 1 building trace
-static int using _trace_cache;		//0 fetch from I$, 1 fetch from TC
-static int trace_index;					//index in TC[].pc of block using
-static int trace_cache_line_index	//index in TC[index] of line
-static int index_of_next_branch		//index of next branch in tc.flags and tc.b_pc
-static int count_to_next_trace 		//count down to build next trace
+static int trace_being_formed = 0;  		//0 not building trace, 1 building trace
+static int using_trace_cache = 0;		//0 fetch from I$, 1 fetch from TC
+static int trace_index = 0;					//index in TC[].pc of block using
+static int trace_cache_line_index = 0;	//index in TC[index] of line
+static int index_of_next_branch = 0;		//index of next branch in tc.flags and tc.b_pc
+static int count_to_next_trace = 0; 		//count down to build next trace
 
 /* simulated registers */
 static struct regs_t regs;
@@ -3946,7 +3945,7 @@ ruu_dispatch(void)
 		  	index_of_next_branch++;
 	  		if(tc[trace_cache_line_index].n_insts - 1 == INSTS_PER_TRACE)
 	  		{
-		  		tc[trace_cache_line_index].fall_add = regs.regs_PC + sizeof(md_inst_t);
+		  		tc[trace_cache_line_index].fall_addr = regs.regs_PC + sizeof(md_inst_t);
 		  		tc[trace_cache_line_index].target_addr = regs.regs_NPC;
 		  		index_of_next_branch = 0;
 		  	}
@@ -4303,7 +4302,7 @@ ruu_fetch(void)
 		
 		//get trace line TU//
 		if(!using_trace_cache && !trace_being_formed)
-			trace_cache_line_index = search_tc(fetch_regs_PC, TC, TRACE_CACHE_SIZE, pred);
+			trace_cache_line_index = search_tc(fetch_regs_PC, tc, TRACE_CACHE_SIZE, pred);
 		
 		//check that we should fetch from trace cache otherwise get inst from cache TU//
 		if(!trace_being_formed && (trace_cache_line_index >= 0 || using_trace_cache))
@@ -4702,7 +4701,7 @@ sim_main(void)
 /*TU returns index in trace cache where pc can be found*/
 int search_tc(int pc, struct TraceCache *tc, int size, struct bpred_t *pred)
 {
-	int i, j, prediction;
+	int i, j;// prediction
 	enum md_opcode op;
 	md_inst_t inst;
 	md_addr_t pred_PC;
@@ -4722,7 +4721,7 @@ int search_tc(int pc, struct TraceCache *tc, int size, struct bpred_t *pred)
 					/* opcode */op,
 					/* call? */MD_IS_CALL(op),
 					/* return? */MD_IS_RETURN(op),
-					/* updt */&(TUNeedDirUpdate),
+					/* updt */NULL,//&(TUNeedDirUpdate),
 					/* RSB index */NULL);
 				if(pred_PC != tc[i].b_pc[j] + sizeof(md_inst_t))
 					return -1;				

@@ -77,7 +77,7 @@
 #include "ptrace.h"
 #include "dlite.h"
 #include "sim.h"
-#include "tracecache.h" //TU//
+//#include "tracecache.h" //TU//
 
 /*
  * This file implements a very detailed out-of-order issue superscalar
@@ -88,6 +88,23 @@
 
 /*trace cache array TU*/
 static struct TraceCache *TC;
+
+//This was created by Mali, student from UCF//
+static struct TraceCache
+{
+    bool valid;			//Specifies if this cache line is valid//
+    unsigned int tag;		//Stores the tag (tag of the first PC)//
+    unsigned int *flags;	//Stores 1 or 0 (Taken or Not Taken) for branch//
+    unsigned int mask;		//Specifies # of branches, and if last instr is branch//	
+    unsigned int fall_addr;	//If last instr is branch, its fall through address//
+    unsigned int target_addr;	//If last instr is branch, its target address//
+    unsigned int n_insts;	//Number of Instr in Trace Cache Line//
+    unsigned int *pc;		//The PCs of each instruction//
+    unsigned int *b_pc;		//The PCs of branch instructions//
+    unsigned int *pred_tag;	//???//
+    bool last_taken;		//??If last instr is branch, is it taken or not taken//
+};
+
 
 /*trace setting variables TU*/
 static int trace_being_formed;  		//0 not building trace, 1 building trace
@@ -4680,3 +4697,40 @@ sim_main(void)
 	return;
     }
 }
+
+
+/*TU returns index in trace cache where pc can be found*/
+int search_tc(int pc, struct TraceCache *tc, int size, struct bpred_t *pred)
+{
+	int i, j, prediction;
+	enum md_opcode op;
+	md_inst_t inst;
+	md_addr_t pred_PC;
+	
+	for(i = 0; i < size; i++)
+	{
+		if(tc[i].valid && pc == tc[i].pc[0])
+			//search all branches//
+			for(j = 0; j < tc[i].mask >> 0x01; j++)
+			{
+				/* pre-decode instruction, used for bpred stats recording */
+				MD_FETCH_INST(inst, mem, tc[i].b_pc[j]);
+				MD_SET_OPCODE(op, inst);
+				pred_PC = bpred_lookup(pred,
+					/* branch address */tc[i].b_pc[j],
+					/* target address *//* FIXME: not computed */0,
+					/* opcode */op,
+					/* call? */MD_IS_CALL(op),
+					/* return? */MD_IS_RETURN(op),
+					/* updt */&(TUNeedDirUpdate),
+					/* RSB index */NULL);
+				if(pred_PC != tc[i].b_pc[j] + sizeof(md_inst_t))
+					return -1;				
+			}
+			
+			return i;	
+	}
+	
+	return -1;
+}
+

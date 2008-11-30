@@ -98,7 +98,8 @@ static struct TraceCache
     unsigned int n_insts;	//Number of Instr in Trace Cache Line//
     unsigned int *pc;		//The PCs of each instruction//
     unsigned int *b_pc;		//The PCs of branch instructions//
-    unsigned int *pred_tag;	//???//
+    struct bpred_update_t *dir_update; //pred state pointer//
+    //unsigned int *pred_tag;	//???//
     int last_taken;		//??If last instr is branch, is it taken or not taken//
 };
 
@@ -281,6 +282,22 @@ static int bugcompat_mode;
 #define FU_MEMPORT_INDEX		2
 #define FU_FPALU_INDEX			3
 #define FU_FPMULT_INDEX			4
+
+/*TU Initialize trace cache*/
+void trace_init()
+{
+	int i, j;
+	
+	tc = malloc(TRACE_CACHE_SIZE * sizeof(struct TraceCache));
+	
+	for(i = 0; i < TRACE_CACHE_SIZE; i++)
+	{
+		tc[i].flags = malloc(INSTS_PER_TRACE * sizeof(int));
+		tc[i].pc = malloc(INSTS_PER_TRACE * sizeof(int));
+		tc[i].b_pc = malloc(INSTS_PER_TRACE * sizeof(int));
+		tc[i].dir_update = malloc(INSTS_PER_TRACE * sizeof(struct bpred_update_t));
+	}
+}
 
 /* resource pool definition, NOTE: update FU_*_INDEX defs if you change this */
 struct res_desc fu_config[] = {
@@ -3902,9 +3919,17 @@ ruu_dispatch(void)
       
       /*TU start/continue building trace*/
       if(!using_trace_cache)
-      	if(trace_being_formed || !count_to_next_trace--)
+      {
+      	if(!count_to_next_trace-- || trace_being_formed)
       	{
-      		if(tc[trace_cache_line_index].n_insts > INSTS_PER_TRACE)
+      		if(trace_cache_line_index < 0)
+      			trace_cache_line_index = 0;
+      		if(count_to_next_trace < 0)
+      		{
+      			trace_cache_line_index = regs.regs_PC % TRACE_CACHE_SIZE;
+		   		count_to_next_trace = TRACE_RATIO * INSTS_PER_TRACE;
+		   	}
+      		if(tc[trace_cache_line_index].n_insts > INSTS_PER_TRACE - 1)
       		{
       			trace_being_formed = 0;
       			index_of_next_branch = 0;
@@ -3914,14 +3939,14 @@ ruu_dispatch(void)
       		else
       		{
       			trace_being_formed = 1;
-		   		count_to_next_trace = TRACE_RATIO;
 		   		tc[trace_cache_line_index].valid = 1;
 		   		tc[trace_cache_line_index].tag = regs.regs_PC;  //maybe remove for proper tag
 					tc[trace_cache_line_index].n_insts++;
 					tc[trace_cache_line_index].pc[trace_index] = regs.regs_PC;
+					trace_index++;
 				}
       	}
-      		
+      }		
 
       if ((pred_PC != regs.regs_NPC && pred_perfect)
 	  || ((MD_OP_FLAGS(op) & (F_CTRL|F_DIRJMP)) == (F_CTRL|F_DIRJMP)
@@ -4302,10 +4327,10 @@ ruu_fetch(void)
 		
 		//get trace line TU//
 		if(!using_trace_cache && !trace_being_formed)
-			trace_cache_line_index = search_tc(fetch_regs_PC, tc, TRACE_CACHE_SIZE, pred);
+			trace_cache_line_index = search_tc(fetch_regs_PC, TRACE_CACHE_SIZE);
 		
 		//check that we should fetch from trace cache otherwise get inst from cache TU//
-		if(!trace_being_formed && (trace_cache_line_index >= 0 || using_trace_cache))
+		if(!trace_being_formed && using_trace_cache)
 		{
 			//Right now adding hit to I$1, maybe should keep trace stats ??//
 			cache_il1->hits++;
@@ -4408,6 +4433,8 @@ ruu_fetch(void)
 	}
     End of pred removal TU*/
       /* commit this instruction to the IFETCH -> DISPATCH queue */
+      if(using_trace_cache)
+      	fetch_data[fetch_tail].dir_update = tc[trace_cache_line_index].dir_update[index_of_next_branch];
       fetch_data[fetch_tail].IR = inst;
       fetch_data[fetch_tail].regs_PC = fetch_regs_PC;
       fetch_data[fetch_tail].pred_PC = fetch_pred_PC;
@@ -4517,6 +4544,9 @@ simoo_mstate_obj(FILE *stream,			/* output stream */
 void
 sim_main(void)
 {
+	/*TU initialize tracecache*/
+	trace_init();
+	
   /* ignore any floating point exceptions, they may occur on mis-speculated
      execution paths */
   signal(SIGFPE, SIG_IGN);
@@ -4697,9 +4727,8 @@ sim_main(void)
     }
 }
 
-
 /*TU returns index in trace cache where pc can be found*/
-int search_tc(int pc, struct TraceCache *tc, int size, struct bpred_t *pred)
+int search_tc(int PC, int size)
 {
 	int i, j;// prediction
 	enum md_opcode op;
@@ -4708,7 +4737,8 @@ int search_tc(int pc, struct TraceCache *tc, int size, struct bpred_t *pred)
 	
 	for(i = 0; i < size; i++)
 	{
-		if(tc[i].valid && pc == tc[i].pc[0])
+		if(tc[i].valid && PC == tc[i].pc[0])
+		{
 			//search all branches//
 			for(j = 0; j < tc[i].mask >> 0x01; j++)
 			{
@@ -4721,13 +4751,14 @@ int search_tc(int pc, struct TraceCache *tc, int size, struct bpred_t *pred)
 					/* opcode */op,
 					/* call? */MD_IS_CALL(op),
 					/* return? */MD_IS_RETURN(op),
-					/* updt */NULL,//&(TUNeedDirUpdate),
+					/* updt */&(tc[i].dir_update[j]),
 					/* RSB index */NULL);
 				if(pred_PC != tc[i].b_pc[j] + sizeof(md_inst_t))
 					return -1;				
 			}
-			
+			using_trace_cache = 1;
 			return i;	
+		}
 	}
 	
 	return -1;

@@ -49,6 +49,10 @@
  * Copyright (C) 1994-2003 by Todd M. Austin, Ph.D. and SimpleScalar, LLC.
  */
 
+/*TU*/
+#define TRACE_RATIO 			8
+#define INSTR_PER_TRACE 	8
+#define TRACE_CACHE_SIZE	32
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -73,6 +77,7 @@
 #include "ptrace.h"
 #include "dlite.h"
 #include "sim.h"
+#include "tracecache.h" //TU//
 
 /*
  * This file implements a very detailed out-of-order issue superscalar
@@ -80,6 +85,17 @@
  * This simulator is a performance simulator, tracking the latency of all
  * pipeline operations.
  */
+
+/*trace cache array TU*/
+static struct TraceCache *TC;
+
+/*trace setting variables TU*/
+static int trace_being_formed;  		//0 not building trace, 1 building trace
+static int using _trace_cache;		//0 fetch from I$, 1 fetch from TC
+static int trace_index;					//index in TC[].pc of block using
+static int trace_cache_line_index	//index in TC[index] of line
+static int index_of_next_branch		//index of next branch in tc.flags and tc.b_pc
+static int count_to_next_trace 		//count down to build next trace
 
 /* simulated registers */
 static struct regs_t regs;
@@ -3867,6 +3883,29 @@ ruu_dispatch(void)
 
       br_taken = (regs.regs_NPC != (regs.regs_PC + sizeof(md_inst_t)));
       br_pred_taken = (pred_PC != (regs.regs_PC + sizeof(md_inst_t)));
+      
+      /*TU start/continue building trace*/
+      if(!using_trace_cache)
+      	if(trace_being_formed || !count_to_next_trace--)
+      	{
+      		if(tc[trace_cache_line_index].n_insts > INSTS_PER_TRACE)
+      		{
+      			trace_being_formed = 0;
+      			index_of_next_branch = 0;
+      			trace_cache_line_index = 0;
+      			trace_index = 0;
+      		}
+      		else
+      		{
+      			trace_being_formed = 1;
+		   		count_to_next_trace = TRACE_RATIO;
+		   		tc[trace_cache_line_index].valid = 1;
+		   		tc[trace_cache_line_index].tag = regs.regs_PC;  //maybe remove for proper tag
+					tc[trace_cache_line_index].n_insts++;
+					tc[trace_cache_line_index].pc[trace_index] = regs.regs_PC;
+				}
+      	}
+      		
 
       if ((pred_PC != regs.regs_NPC && pred_perfect)
 	  || ((MD_OP_FLAGS(op) & (F_CTRL|F_DIRJMP)) == (F_CTRL|F_DIRJMP)
@@ -3881,6 +3920,25 @@ ruu_dispatch(void)
              the updates to the fetch values at the end of this function.  If
              case #2, also charge a mispredict penalty for redirecting fetch */
 	  fetch_pred_PC = fetch_regs_PC = regs.regs_NPC;
+	  
+	  /*TU trace being formed add this branch info*/
+	  if(trace_being_formed)
+	  {
+	  		tc[trace_cache_line_index].flags[index_of_next_branch] = br_taken;
+	  		tc[trace_cache_line_index].b_pc[index_of_next_branch] = regs.regs_PC;
+		  	index_of_next_branch++;
+	  		if(tc[trace_cache_line_index].n_insts - 1 == INSTS_PER_TRACE)
+	  		{
+		  		tc[trace_cache_line_index].fall_add = regs.regs_PC + sizeof(md_inst_t);
+		  		tc[trace_cache_line_index].target_addr = regs.regs_NPC;
+		  		index_of_next_branch = 0;
+		  	}
+     }
+     
+	  /*TU stop using trace cache if bad prediction in trace cache*/
+	  if(using_trace_cache && tc[trace_cache_line_index].flags[index_of_next_branch++] != br_taken)
+	  	trace_index = using_trace_cache = 0;
+	  
 	  /* was: if (pred_perfect) */
 	  if (pred_perfect)
 	    pred_PC = regs.regs_NPC;
@@ -4225,43 +4283,59 @@ ruu_fetch(void)
 	{
 	  /* read instruction from memory */
 	  MD_FETCH_INST(inst, mem, fetch_regs_PC);
+		
+		//get trace line TU//
+		if(!using_trace_cache && !trace_being_formed)
+			trace_cache_line_index = search_tc(fetch_regs_PC, TC, TRACE_CACHE_SIZE, pred);
+		
+		//check that we should fetch from trace cache otherwise get inst from cache TU//
+		if(!trace_being_formed && (trace_cache_line_index >= 0 || using_trace_cache))
+		{
+			//Right now adding hit to I$1, maybe should keep trace stats ??//
+			cache_il1->hits++;
+			
+			
+		}
+		//sim stuff, not TU//
+		else
+		{
+		  /* address is within program text, read instruction from memory */
+		  lat = cache_il1_lat;
+		  if (cache_il1)
+			 {
+			   /* access the I-cache */
+			   lat =
+			cache_access(cache_il1, Read, IACOMPRESS(fetch_regs_PC),
+					  NULL, ISCOMPRESS(sizeof(md_inst_t)), sim_cycle,
+					  NULL, NULL);
+			   if (lat > cache_il1_lat)
+			last_inst_missed = TRUE;
+			 }
 
-	  /* address is within program text, read instruction from memory */
-	  lat = cache_il1_lat;
-	  if (cache_il1)
-	    {
-	      /* access the I-cache */
-	      lat =
-		cache_access(cache_il1, Read, IACOMPRESS(fetch_regs_PC),
-			     NULL, ISCOMPRESS(sizeof(md_inst_t)), sim_cycle,
-			     NULL, NULL);
-	      if (lat > cache_il1_lat)
-		last_inst_missed = TRUE;
-	    }
+		  if (itlb)
+			 {
+			   /* access the I-TLB, NOTE: this code will initiate
+			 speculative TLB misses */
+			   tlb_lat =
+			cache_access(itlb, Read, IACOMPRESS(fetch_regs_PC),
+					  NULL, ISCOMPRESS(sizeof(md_inst_t)), sim_cycle,
+					  NULL, NULL);
+			   if (tlb_lat > 1)
+			last_inst_tmissed = TRUE;
 
-	  if (itlb)
-	    {
-	      /* access the I-TLB, NOTE: this code will initiate
-		 speculative TLB misses */
-	      tlb_lat =
-		cache_access(itlb, Read, IACOMPRESS(fetch_regs_PC),
-			     NULL, ISCOMPRESS(sizeof(md_inst_t)), sim_cycle,
-			     NULL, NULL);
-	      if (tlb_lat > 1)
-		last_inst_tmissed = TRUE;
+			   /* I-cache/I-TLB accesses occur in parallel */
+			   lat = MAX(tlb_lat, lat);
+			 }
 
-	      /* I-cache/I-TLB accesses occur in parallel */
-	      lat = MAX(tlb_lat, lat);
-	    }
-
-	  /* I-cache/I-TLB miss? assumes I-cache hit >= I-TLB hit */
-	  if (lat != cache_il1_lat)
-	    {
-	      /* I-cache miss, block fetch until it is resolved */
-	      ruu_fetch_issue_delay += lat - 1;
-	      break;
-	    }
-	  /* else, I-cache/I-TLB hit */
+		  /* I-cache/I-TLB miss? assumes I-cache hit >= I-TLB hit */
+		  if (lat != cache_il1_lat)
+			 {
+			   /* I-cache miss, block fetch until it is resolved */
+			   ruu_fetch_issue_delay += lat - 1;
+			   break;
+			 }
+		  /* else, I-cache/I-TLB hit */
+		}
 	}
       else
 	{
@@ -4272,38 +4346,39 @@ ruu_fetch(void)
       /* have a valid inst, here */
 
       /* possibly use the BTB target */
+/*TU Remove the branch predictor, using pred for trace
       if (pred)
 	{
 	  enum md_opcode op;
 
-	  /* pre-decode instruction, used for bpred stats recording */
+	  /*pre-decode instruction, used for bpred stats recording *
 	  MD_SET_OPCODE(op, inst);
 	  
 	  /* get the next predicted fetch address; only use branch predictor
 	     result for branches (assumes pre-decode bits); NOTE: returned
-	     value may be 1 if bpred can only predict a direction */
+	     value may be 1 if bpred can only predict a direction *
 	  if (MD_OP_FLAGS(op) & F_CTRL)
 	    fetch_pred_PC =
 	      bpred_lookup(pred,
-			   /* branch address */fetch_regs_PC,
-			   /* target address *//* FIXME: not computed */0,
-			   /* opcode */op,
-			   /* call? */MD_IS_CALL(op),
-			   /* return? */MD_IS_RETURN(op),
-			   /* updt */&(fetch_data[fetch_tail].dir_update),
-			   /* RSB index */&stack_recover_idx);
+			   /* branch address *fetch_regs_PC,
+			   /* target address ** FIXME: not computed *0,
+			   /* opcode *op,
+			   /* call? *MD_IS_CALL(op),
+			   /* return? *MD_IS_RETURN(op),
+			   /* updt *&(fetch_data[fetch_tail].dir_update),
+			   /* RSB index *&stack_recover_idx);
 	  else
 	    fetch_pred_PC = 0;
 
-	  /* valid address returned from branch predictor? */
+	  /* valid address returned from branch predictor? *
 	  if (!fetch_pred_PC)
 	    {
-	      /* no predicted taken target, attempt not taken target */
+	      /* no predicted taken target, attempt not taken target *
 	      fetch_pred_PC = fetch_regs_PC + sizeof(md_inst_t);
 	    }
 	  else
 	    {
-	      /* go with target, NOTE: discontinuous fetch, so terminate */
+	      /* go with target, NOTE: discontinuous fetch, so terminate *
 	      branch_cnt++;
 	      if (branch_cnt >= fetch_speed)
 		done = TRUE;
@@ -4312,10 +4387,10 @@ ruu_fetch(void)
       else
 	{
 	  /* no predictor, just default to predict not taken, and
-	     continue fetching instructions linearly */
+	     continue fetching instructions linearly *
 	  fetch_pred_PC = fetch_regs_PC + sizeof(md_inst_t);
 	}
-
+    End of pred removal TU*/
       /* commit this instruction to the IFETCH -> DISPATCH queue */
       fetch_data[fetch_tail].IR = inst;
       fetch_data[fetch_tail].regs_PC = fetch_regs_PC;

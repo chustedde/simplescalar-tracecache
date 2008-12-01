@@ -93,11 +93,11 @@ static struct TraceCache
     unsigned int tag;		//Stores the tag (tag of the first PC)//
     unsigned int *flags;	//Stores 1 or 0 (Taken or Not Taken) for branch//
     unsigned int mask;		//Specifies # of branches, and if last instr is branch//	
-    unsigned int fall_addr;	//If last instr is branch, its fall through address//
-    unsigned int target_addr;	//If last instr is branch, its target address//
+    md_addr_t fall_addr;	//If last instr is branch, its fall through address//
+    md_addr_t target_addr;	//If last instr is branch, its target address//
     unsigned int n_insts;	//Number of Instr in Trace Cache Line//
-    unsigned int *pc;		//The PCs of each instruction//
-    unsigned int *b_pc;		//The PCs of branch instructions//
+    md_addr_t *pc;		//The PCs of each instruction//
+    md_addr_t *b_pc;		//The PCs of branch instructions//
     struct bpred_update_t *dir_update; //pred state pointer//
     //unsigned int *pred_tag;	//???//
     int last_taken;		//??If last instr is branch, is it taken or not taken//
@@ -3922,6 +3922,8 @@ ruu_dispatch(void)
       /*TU start/continue building trace*/
       if(!using_trace_cache)
       {
+      	if(count_to_next_trace < 0)
+      		count_to_next_trace = TRACE_RATIO;
       	if(!count_to_next_trace-- || trace_being_formed)
       	{
       		if(trace_cache_line_index < 0)
@@ -4333,7 +4335,7 @@ ruu_fetch(void)
 	  MD_FETCH_INST(inst, mem, fetch_regs_PC);
 		
 		//get trace line TU//
-		if(!using_trace_cache && !trace_being_formed)
+		if(!using_trace_cache)
 			trace_cache_line_index = search_tc();
 		
 		//check that we should fetch from trace cache otherwise get inst from cache TU//
@@ -4765,6 +4767,8 @@ int search_tc()
 					return -1;				
 			}
 			using_trace_cache = 1;
+			trace_being_formed = 0;
+			tc[trace_cache_line_index].valid = 0;
 			return i;	
 		}
 	//}

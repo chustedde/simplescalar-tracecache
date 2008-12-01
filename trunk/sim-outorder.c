@@ -105,10 +105,14 @@ static struct TraceCache
     int last_taken;		//??If last instr is branch, is it taken or not taken//
 };
 
+//TU this will be our buffer to fill as we build a trace so as not to mess up current traces//
+static struct TraceCache build_buffer;
+
 /*trace cache array TU*/
 static struct TraceCache *tc;
 
 /*trace setting variables TU*/
+static unsigned int tracehit = 0;
 static int trace_being_formed = 0;  		//0 not building trace, 1 building trace
 static int using_trace_cache = 0;		//0 fetch from I$, 1 fetch from TC
 static int trace_index = 0;					//index in TC[].pc of block using
@@ -310,6 +314,29 @@ void trace_init()
 		for(j = 0; j < INSTS_PER_TRACE; j++)
 			tc[i].pred_pc[j] = 0;
 	}
+	
+	build_buffer.flags = malloc(INSTS_PER_TRACE * sizeof(int));
+	build_buffer.pc = malloc(INSTS_PER_TRACE * sizeof(md_addr_t));
+	build_buffer.b_pc = malloc(INSTS_PER_TRACE * sizeof(md_addr_t));
+	build_buffer.pred_pc = malloc(INSTS_PER_TRACE * sizeof(md_addr_t));
+}
+
+void clearBuildBuffer()
+{
+	int i;
+	
+    build_buffer.tag = 0;
+    for(i = 0; i < INSTS_PER_TRACE; i++)
+    {
+    	build_buffer.flags[i] = 0;	
+    	build_buffer.pc[i] = 0;
+    	build_buffer.b_pc[i] = 0;
+    	build_buffer.pred_pc[i] = 0;
+    }
+    build_buffer.mask = 0;
+    build_buffer.fall_addr = 0;
+    build_buffer.target_addr = 0;
+    build_buffer.n_insts = 0;
 }
 
 /* resource pool definition, NOTE: update FU_*_INDEX defs if you change this */
@@ -3763,7 +3790,7 @@ static struct RS_link last_op = RSLINK_NULL_DATA;
 static void
 ruu_dispatch(void)
 {
-  int i;
+  int i, k;
   int n_dispatched;			/* total insts dispatched */
   md_inst_t inst;			/* actual instruction bits */
   enum md_opcode op;			/* decoded opcode enum */
@@ -3941,13 +3968,25 @@ ruu_dispatch(void)
       			tc_build_index = 0;
       		if(start_of_trace)
       		{
+      			clearBuildBuffer();
       			tc_build_index = regs.regs_PC % TRACE_CACHE_SIZE;
       			trace_index = 0;
 		   		count_to_next_trace = TRACE_RATIO;
-		   		tc[tc_build_index].n_insts = 0;
+		   		build_buffer.n_insts = 0;
 		   	}
-      		if(!start_of_trace && tc[tc_build_index].n_insts > INSTS_PER_TRACE - 1)
+      		if(!start_of_trace && build_buffer.n_insts > INSTS_PER_TRACE - 1)
       		{
+	   			tc[tc_build_index].valid = build_buffer.valid;
+					tc[tc_build_index].tag = build_buffer.tag; 
+					tc[tc_build_index].n_insts = build_buffer.n_insts;
+				  	tc[tc_build_index].fall_addr = build_buffer.fall_addr;
+				  	tc[tc_build_index].target_addr = build_buffer.target_addr;
+      			for(k = 0; k < INSTS_PER_TRACE; k++)
+      			{
+						tc[tc_build_index].pc[k] = build_buffer.pc[i];
+						tc[tc_build_index].flags[k] = build_buffer.flags[i];
+				  		tc[tc_build_index].b_pc[k] = build_buffer.b_pc[i];
+					}
       			start_of_trace = 1;
       			trace_being_formed = 0;
       			index_of_next_branch = 0;
@@ -3957,24 +3996,24 @@ ruu_dispatch(void)
       		else
       		{
       			trace_being_formed = 1;
-		   		tc[tc_build_index].valid = 1;
-		   		tc[tc_build_index].tag = regs.regs_PC;  //maybe remove for proper tag
-					tc[tc_build_index].n_insts++;
-					tc[tc_build_index].pc[trace_index] = regs.regs_PC;
+		   		build_buffer.valid = 1;
+		   		build_buffer.tag = regs.regs_PC;  //maybe remove for proper tag
+					build_buffer.n_insts++;
+					build_buffer.pc[trace_index] = regs.regs_PC;
 					trace_index++;
 					start_of_trace = 0;
 					
 				  /*TU add this branch info*/
 				  if((MD_OP_FLAGS(op) & (F_CTRL|F_DIRJMP)) == (F_CTRL|F_DIRJMP))
 				  {
-				  		tc[tc_build_index].flags[index_of_next_branch] = br_taken;
-				  		tc[tc_build_index].b_pc[index_of_next_branch] = regs.regs_PC;
-				  		tc[tc_build_index].mask++;
+				  		build_buffer.flags[index_of_next_branch] = br_taken;
+				  		build_buffer.b_pc[index_of_next_branch] = regs.regs_PC;
+				  		build_buffer.mask++;
 					  	index_of_next_branch++;
-				  		if(tc[tc_build_index].n_insts - 1 == INSTS_PER_TRACE)
+				  		if(build_buffer.n_insts - 1 == INSTS_PER_TRACE)
 				  		{
-					  		tc[tc_build_index].fall_addr = regs.regs_PC + sizeof(md_inst_t);
-					  		tc[tc_build_index].target_addr = regs.regs_NPC;
+					  		build_buffer.fall_addr = regs.regs_PC + sizeof(md_inst_t);
+					  		build_buffer.target_addr = regs.regs_NPC;
 					  		index_of_next_branch = 0;
 					  	}
 					}
@@ -4353,7 +4392,8 @@ ruu_fetch(void)
 		if(!trace_being_formed && using_trace_cache)
 		{
 			//Right now adding hit to I$1, maybe should keep trace stats ??//
-			cache_il1->hits++;			
+//			cache_il1->hits++;			
+	tracehit++;
 			keep_using_trace_cache--;
 			if(!keep_using_trace_cache)
 				using_trace_cache = 0;
@@ -4762,11 +4802,16 @@ sim_main(void)
       /* go to next cycle */
       sim_cycle++;
 
+		if(!(tracehit % 1000))
+      	printf("Trace Hits: %d\n", tracehit);
       /* finish early? */
       if (max_insts && sim_num_insn >= max_insts)
-	return;
+      {
+			return;
+		}
     }
 }
+
 
 /*TU returns index in trace cache where pc can be found*/
 int search_tc()
@@ -4829,4 +4874,5 @@ int search_tc()
 	
 	return -1;
 }
+
 

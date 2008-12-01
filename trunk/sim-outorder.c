@@ -52,7 +52,7 @@
 /*TU*/
 #define TRACE_RATIO 			8
 #define INSTS_PER_TRACE 	8
-#define TRACE_CACHE_SIZE	32
+#define TRACE_CACHE_SIZE	1048
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -292,6 +292,7 @@ void trace_init()
 	
 	for(i = 0; i < TRACE_CACHE_SIZE; i++)
 	{
+		tc[i].mask = 0;
 		tc[i].flags = malloc(INSTS_PER_TRACE * sizeof(int));
 		tc[i].pc = malloc(INSTS_PER_TRACE * sizeof(int));
 		tc[i].b_pc = malloc(INSTS_PER_TRACE * sizeof(int));
@@ -3927,7 +3928,7 @@ ruu_dispatch(void)
       		if(count_to_next_trace < 0)
       		{
       			trace_cache_line_index = regs.regs_PC % TRACE_CACHE_SIZE;
-		   		count_to_next_trace = TRACE_RATIO * INSTS_PER_TRACE;
+		   		count_to_next_trace = TRACE_RATIO;
 		   	}
       		if(tc[trace_cache_line_index].n_insts > INSTS_PER_TRACE - 1)
       		{
@@ -3967,6 +3968,7 @@ ruu_dispatch(void)
 	  {
 	  		tc[trace_cache_line_index].flags[index_of_next_branch] = br_taken;
 	  		tc[trace_cache_line_index].b_pc[index_of_next_branch] = regs.regs_PC;
+	  		tc[trace_cache_line_index].mask++;
 		  	index_of_next_branch++;
 	  		if(tc[trace_cache_line_index].n_insts - 1 == INSTS_PER_TRACE)
 	  		{
@@ -4735,12 +4737,12 @@ int search_tc(int PC, int size)
 	md_inst_t inst;
 	md_addr_t pred_PC;
 	
-	for(i = 0; i < size; i++)
-	{
+//	for(i = 0; i < size; i++)
+//	{
 		if(tc[i].valid && PC == tc[i].pc[0])
 		{
 			//search all branches//
-			for(j = 0; j < tc[i].mask >> 0x01; j++)
+			for(j = 0; j < tc[i].mask; j++)
 			{
 				/* pre-decode instruction, used for bpred stats recording */
 				MD_FETCH_INST(inst, mem, tc[i].b_pc[j]);

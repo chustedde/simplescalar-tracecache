@@ -50,9 +50,9 @@
  */
 
 /*TU*/
-#define TRACE_RATIO 			2
-#define INSTS_PER_TRACE 	2
-#define TRACE_CACHE_SIZE	1048
+#define TRACE_RATIO 			8
+#define INSTS_PER_TRACE 	8
+#define TRACE_CACHE_SIZE	128
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -98,7 +98,9 @@ static struct TraceCache
     unsigned int n_insts;	//Number of Instr in Trace Cache Line//
     md_addr_t *pc;		//The PCs of each instruction//
     md_addr_t *b_pc;		//The PCs of branch instructions//
+    md_addr_t *pred_pc; 	//predicted pc on searchtc bpredlookup
     struct bpred_update_t *dir_update; //pred state pointer//
+	 int *stack_recover_idx;	//stack recovery index for mis-predicted branches    
     //unsigned int *pred_tag;	//???//
     int last_taken;		//??If last instr is branch, is it taken or not taken//
 };
@@ -296,9 +298,16 @@ void trace_init()
 	{
 		tc[i].mask = 0;
 		tc[i].flags = malloc(INSTS_PER_TRACE * sizeof(int));
-		tc[i].pc = malloc(INSTS_PER_TRACE * sizeof(int));
-		tc[i].b_pc = malloc(INSTS_PER_TRACE * sizeof(int));
+		tc[i].pc = malloc(INSTS_PER_TRACE * sizeof(md_addr_t));
+		tc[i].b_pc = malloc(INSTS_PER_TRACE * sizeof(md_addr_t));
 		tc[i].dir_update = malloc(INSTS_PER_TRACE * sizeof(struct bpred_update_t));
+		tc[i].dir_update->pdir1 = NULL;
+		tc[i].dir_update->pdir2 = NULL;
+		tc[i].dir_update->pmeta = NULL;
+		tc[i].stack_recover_idx = malloc(INSTS_PER_TRACE * sizeof(int));
+		tc[i].pred_pc = malloc(INSTS_PER_TRACE * sizeof(md_addr_t));
+		for(j = 0; j < INSTS_PER_TRACE; j++)
+			tc[i].pred_pc[j] = 0;
 	}
 }
 
@@ -4445,11 +4454,24 @@ ruu_fetch(void)
 	  
       /* commit this instruction to the IFETCH -> DISPATCH queue */
       if(using_trace_cache)
+      {
       	fetch_data[fetch_tail].dir_update = tc[trace_cache_line_index].dir_update[index_of_next_branch];
+ 			enum md_opcode op;
+      	MD_SET_OPCODE(op, inst);
+      	if (MD_OP_FLAGS(op) & F_CTRL)
+      	{
+      		if(!tc[trace_cache_line_index].pred_pc[index_of_next_branch])
+			      fetch_data[fetch_tail].pred_PC = fetch_pred_PC;
+			   else
+			   	fetch_data[fetch_tail].pred_PC = tc[trace_cache_line_index].pred_pc[index_of_next_branch];
+      		fetch_data[fetch_tail].stack_recover_idx = tc[trace_cache_line_index].stack_recover_idx[index_of_next_branch];
+      	}
+      	else
+		      fetch_data[fetch_tail].stack_recover_idx = stack_recover_idx;      		
+		}
       fetch_data[fetch_tail].IR = inst;
       fetch_data[fetch_tail].regs_PC = fetch_regs_PC;
-      fetch_data[fetch_tail].pred_PC = fetch_pred_PC;
-      fetch_data[fetch_tail].stack_recover_idx = stack_recover_idx;
+
       fetch_data[fetch_tail].ptrace_seq = ptrace_seq++;
 
       /* for pipe trace */
@@ -4741,11 +4763,14 @@ sim_main(void)
 /*TU returns index in trace cache where pc can be found*/
 int search_tc()
 {
-	int i, j;// prediction
+	int i, j, k;
 	enum md_opcode op;
 	md_inst_t inst;
-	md_addr_t pred_PC;
+	md_addr_t prediction;
+	int stack_rec_idx[INSTS_PER_TRACE];
 	
+	for(i = 0; i < INSTS_PER_TRACE; i++)
+		stack_rec_idx[i] = 0;
 //	for(i = 0; i < size; i++) TU since it is direct mapped don't need to search all ???
 //	{
 	i = fetch_regs_PC % TRACE_CACHE_SIZE;
@@ -4757,19 +4782,35 @@ int search_tc()
 				/* pre-decode instruction, used for bpred stats recording */
 				MD_FETCH_INST(inst, mem, tc[i].b_pc[j]);
 				MD_SET_OPCODE(op, inst);
-				pred_PC = bpred_lookup(pred,
+				prediction = bpred_lookup(pred,
 					/* branch address */tc[i].b_pc[j],
 					/* target address *//* FIXME: not computed */0,
 					/* opcode */op,
 					/* call? */MD_IS_CALL(op),
 					/* return? */MD_IS_RETURN(op),
 					/* updt */&(tc[i].dir_update[j]),
-					/* RSB index */NULL);
-				if(pred_PC != tc[i].b_pc[j] + sizeof(md_inst_t))
-					return -1;				
+					/* RSB index */&stack_rec_idx[j]);
+				if(!prediction && tc[i].flags[j] != prediction)
+						return -1;
+				if(prediction)
+					if(tc[i].flags[j] != 1)
+						return -1;
+				
+				if(prediction != 1)
+					tc[i].pred_pc[j] = prediction;
+				else
+					if(j == tc[i].mask - 1)
+						tc[i].pred_pc[j] == tc[i].target_addr;
+					else
+						for(k = 0; k < INSTS_PER_TRACE; k++)
+							if(tc[i].b_pc[j] == tc[i].pc[k])
+								tc[i].pred_pc[j] = tc[i].pc[k + 1];					 
 			}
 			using_trace_cache = 1;
 			keep_using_trace_cache = tc[i].n_insts;
+			index_of_next_branch = 0;
+			for(j = 0; j < INSTS_PER_TRACE; j++)
+				tc[i].stack_recover_idx[j] = stack_rec_idx[j];
 			if(trace_being_formed)
 			{
 				trace_being_formed = 0;

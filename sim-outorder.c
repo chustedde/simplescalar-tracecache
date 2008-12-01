@@ -112,7 +112,8 @@ static struct TraceCache *tc;
 static int trace_being_formed = 0;  		//0 not building trace, 1 building trace
 static int using_trace_cache = 0;		//0 fetch from I$, 1 fetch from TC
 static int trace_index = 0;					//index in TC[].pc of block using
-static int trace_cache_line_index = 0;	//index in TC[index] of line
+static int tc_build_index = 0;	//build index in TC[index] of line
+static int tc_using_index = 0;   //using index
 static int index_of_next_branch = 0;		//index of next branch in tc.flags and tc.b_pc
 static int count_to_next_trace = 0; 		//count down to build next trace
 static int start_of_trace = 1;			//whether this is beginning of trace or not
@@ -3936,44 +3937,44 @@ ruu_dispatch(void)
       		count_to_next_trace = TRACE_RATIO;
       	if(!count_to_next_trace-- || trace_being_formed)
       	{
-      		if(trace_cache_line_index < 0)
-      			trace_cache_line_index = 0;
+      		if(tc_build_index < 0)
+      			tc_build_index = 0;
       		if(start_of_trace)
       		{
-      			trace_cache_line_index = regs.regs_PC % TRACE_CACHE_SIZE;
+      			tc_build_index = regs.regs_PC % TRACE_CACHE_SIZE;
       			trace_index = 0;
 		   		count_to_next_trace = TRACE_RATIO;
-		   		tc[trace_cache_line_index].n_insts = 0;
+		   		tc[tc_build_index].n_insts = 0;
 		   	}
-      		if(!start_of_trace && tc[trace_cache_line_index].n_insts > INSTS_PER_TRACE - 1)
+      		if(!start_of_trace && tc[tc_build_index].n_insts > INSTS_PER_TRACE - 1)
       		{
       			start_of_trace = 1;
       			trace_being_formed = 0;
       			index_of_next_branch = 0;
-      			trace_cache_line_index = 0;
+      			tc_build_index = 0;
       			trace_index = 0;
       		}
       		else
       		{
       			trace_being_formed = 1;
-		   		tc[trace_cache_line_index].valid = 1;
-		   		tc[trace_cache_line_index].tag = regs.regs_PC;  //maybe remove for proper tag
-					tc[trace_cache_line_index].n_insts++;
-					tc[trace_cache_line_index].pc[trace_index] = regs.regs_PC;
+		   		tc[tc_build_index].valid = 1;
+		   		tc[tc_build_index].tag = regs.regs_PC;  //maybe remove for proper tag
+					tc[tc_build_index].n_insts++;
+					tc[tc_build_index].pc[trace_index] = regs.regs_PC;
 					trace_index++;
 					start_of_trace = 0;
 					
 				  /*TU add this branch info*/
 				  if((MD_OP_FLAGS(op) & (F_CTRL|F_DIRJMP)) == (F_CTRL|F_DIRJMP))
 				  {
-				  		tc[trace_cache_line_index].flags[index_of_next_branch] = br_taken;
-				  		tc[trace_cache_line_index].b_pc[index_of_next_branch] = regs.regs_PC;
-				  		tc[trace_cache_line_index].mask++;
+				  		tc[tc_build_index].flags[index_of_next_branch] = br_taken;
+				  		tc[tc_build_index].b_pc[index_of_next_branch] = regs.regs_PC;
+				  		tc[tc_build_index].mask++;
 					  	index_of_next_branch++;
-				  		if(tc[trace_cache_line_index].n_insts - 1 == INSTS_PER_TRACE)
+				  		if(tc[tc_build_index].n_insts - 1 == INSTS_PER_TRACE)
 				  		{
-					  		tc[trace_cache_line_index].fall_addr = regs.regs_PC + sizeof(md_inst_t);
-					  		tc[trace_cache_line_index].target_addr = regs.regs_NPC;
+					  		tc[tc_build_index].fall_addr = regs.regs_PC + sizeof(md_inst_t);
+					  		tc[tc_build_index].target_addr = regs.regs_NPC;
 					  		index_of_next_branch = 0;
 					  	}
 					}
@@ -3983,7 +3984,7 @@ ruu_dispatch(void)
 
       if ((pred_PC != regs.regs_NPC && pred_perfect)
 	  || ((MD_OP_FLAGS(op) & (F_CTRL|F_DIRJMP)) == (F_CTRL|F_DIRJMP)
-	      && target_PC != pred_PC && br_pred_taken))
+	      && target_PC != pred_PC && br_pred_taken && using_trace_cache))
 	{
 	  /* Either 1) we're simulating perfect prediction and are in a
              mis-predict state and need to patch up, or 2) We're not simulating
@@ -3996,8 +3997,8 @@ ruu_dispatch(void)
 	  fetch_pred_PC = fetch_regs_PC = regs.regs_NPC;
      
 	  /*TU stop using trace cache if bad prediction in trace cache*/
-	  if(using_trace_cache && tc[trace_cache_line_index].flags[index_of_next_branch++] != br_taken)
-	  	trace_index = using_trace_cache = keep_using_trace_cache = 0;
+	  if(using_trace_cache)
+		trace_index = using_trace_cache = keep_using_trace_cache = 0;
 	  
 	  /* was: if (pred_perfect) */
 	  if (pred_perfect)
@@ -4181,7 +4182,7 @@ ruu_dispatch(void)
 	  if (MD_OP_FLAGS(op) & F_CTRL)
 	    {
 	      sim_num_branches++;
-	      if (pred && bpred_spec_update == spec_ID)
+	      if (pred && (bpred_spec_update == spec_CT || bpred_spec_update == spec_ID))
 		{
 		  bpred_update(pred,
 			       /* branch address */regs.regs_PC,
@@ -4346,7 +4347,7 @@ ruu_fetch(void)
 		
 		//get trace line TU//
 		if(!using_trace_cache)
-			trace_cache_line_index = search_tc();
+			tc_using_index = search_tc();
 		
 		//check that we should fetch from trace cache otherwise get inst from cache TU//
 		if(!trace_being_formed && using_trace_cache)
@@ -4455,23 +4456,30 @@ ruu_fetch(void)
       /* commit this instruction to the IFETCH -> DISPATCH queue */
       if(using_trace_cache)
       {
-      	fetch_data[fetch_tail].dir_update = tc[trace_cache_line_index].dir_update[index_of_next_branch];
+      	fetch_data[fetch_tail].dir_update = tc[tc_using_index].dir_update[index_of_next_branch];
  			enum md_opcode op;
       	MD_SET_OPCODE(op, inst);
       	if (MD_OP_FLAGS(op) & F_CTRL)
       	{
-      		if(!tc[trace_cache_line_index].pred_pc[index_of_next_branch])
+      		if(!tc[tc_using_index].pred_pc[index_of_next_branch])
 			      fetch_data[fetch_tail].pred_PC = fetch_pred_PC;
 			   else
-			   	fetch_data[fetch_tail].pred_PC = tc[trace_cache_line_index].pred_pc[index_of_next_branch];
-      		fetch_data[fetch_tail].stack_recover_idx = tc[trace_cache_line_index].stack_recover_idx[index_of_next_branch];
+			   	fetch_data[fetch_tail].pred_PC = fetch_pred_PC = tc[tc_using_index].pred_pc[index_of_next_branch];
+      		fetch_data[fetch_tail].stack_recover_idx = tc[tc_using_index].stack_recover_idx[index_of_next_branch];
+      		index_of_next_branch++;
       	}
       	else
+      	{
+      		fetch_data[fetch_tail].pred_PC = fetch_pred_PC;
 		      fetch_data[fetch_tail].stack_recover_idx = stack_recover_idx;      		
+		   }
 		}
+		else
+      {
+      	fetch_data[fetch_tail].pred_PC = fetch_pred_PC;
+      }
       fetch_data[fetch_tail].IR = inst;
       fetch_data[fetch_tail].regs_PC = fetch_regs_PC;
-
       fetch_data[fetch_tail].ptrace_seq = ptrace_seq++;
 
       /* for pipe trace */
@@ -4771,55 +4779,53 @@ int search_tc()
 	
 	for(i = 0; i < INSTS_PER_TRACE; i++)
 		stack_rec_idx[i] = 0;
-//	for(i = 0; i < size; i++) TU since it is direct mapped don't need to search all ???
-//	{
+		
 	i = fetch_regs_PC % TRACE_CACHE_SIZE;
-		if(tc[i].valid && fetch_regs_PC == tc[i].pc[0])
+	if(tc[i].valid && fetch_regs_PC == tc[i].pc[0])
+	{
+		//search all branches//
+		for(j = 0; j < tc[i].mask; j++)
 		{
-			//search all branches//
-			for(j = 0; j < tc[i].mask; j++)
-			{
-				/* pre-decode instruction, used for bpred stats recording */
-				MD_FETCH_INST(inst, mem, tc[i].b_pc[j]);
-				MD_SET_OPCODE(op, inst);
-				prediction = bpred_lookup(pred,
-					/* branch address */tc[i].b_pc[j],
-					/* target address *//* FIXME: not computed */0,
-					/* opcode */op,
-					/* call? */MD_IS_CALL(op),
-					/* return? */MD_IS_RETURN(op),
-					/* updt */&(tc[i].dir_update[j]),
-					/* RSB index */&stack_rec_idx[j]);
-				if(!prediction && tc[i].flags[j] != prediction)
-						return -1;
-				if(prediction)
-					if(tc[i].flags[j] != 1)
-						return -1;
-				
-				if(prediction != 1)
-					tc[i].pred_pc[j] = prediction;
+			/* pre-decode instruction, used for bpred stats recording */
+			MD_FETCH_INST(inst, mem, tc[i].b_pc[j]);
+			MD_SET_OPCODE(op, inst);
+			prediction = bpred_lookup(pred,
+				/* branch address */tc[i].b_pc[j],
+				/* target address *//* FIXME: not computed */0,
+				/* opcode */op,
+				/* call? */MD_IS_CALL(op),
+				/* return? */MD_IS_RETURN(op),
+				/* updt */&(tc[i].dir_update[j]),
+				/* RSB index */&stack_rec_idx[j]);
+			if(!prediction && tc[i].flags[j] != prediction)
+					return -1;
+			if(prediction)
+				if(tc[i].flags[j] != 1)
+					return -1;
+			
+			if(prediction != 1)
+				tc[i].pred_pc[j] = prediction;
+			else
+				if(j == tc[i].mask - 1)
+					tc[i].pred_pc[j] == tc[i].target_addr;
 				else
-					if(j == tc[i].mask - 1)
-						tc[i].pred_pc[j] == tc[i].target_addr;
-					else
-						for(k = 0; k < INSTS_PER_TRACE; k++)
-							if(tc[i].b_pc[j] == tc[i].pc[k])
-								tc[i].pred_pc[j] = tc[i].pc[k + 1];					 
-			}
-			using_trace_cache = 1;
-			keep_using_trace_cache = tc[i].n_insts;
-			index_of_next_branch = 0;
-			for(j = 0; j < INSTS_PER_TRACE; j++)
-				tc[i].stack_recover_idx[j] = stack_rec_idx[j];
-			if(trace_being_formed)
-			{
-				trace_being_formed = 0;
-				if(trace_cache_line_index >= 0)
-					tc[trace_cache_line_index].valid = 0;
-			}
-			return i;	
+					for(k = 0; k < INSTS_PER_TRACE; k++)
+						if(tc[i].b_pc[j] == tc[i].pc[k])
+							tc[i].pred_pc[j] = tc[i].pc[k + 1];					 
 		}
-	//}
+		using_trace_cache = 1;
+		keep_using_trace_cache = tc[i].n_insts;
+		index_of_next_branch = 0;
+		for(j = 0; j < INSTS_PER_TRACE; j++)
+			tc[i].stack_recover_idx[j] = stack_rec_idx[j];
+		if(trace_being_formed)
+		{
+			trace_being_formed = 0;
+			if(tc_build_index >= 0)
+				tc[tc_build_index].valid = 0;
+		}
+		return i;	
+	}
 	
 	return -1;
 }

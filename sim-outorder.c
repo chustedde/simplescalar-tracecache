@@ -114,6 +114,7 @@ static int trace_cache_line_index = 0;	//index in TC[index] of line
 static int index_of_next_branch = 0;		//index of next branch in tc.flags and tc.b_pc
 static int count_to_next_trace = 0; 		//count down to build next trace
 static int start_of_trace = 1;			//whether this is beginning of trace or not
+static int keep_using_trace_cache = 0;	//when to stop using trace cache
 
 /* simulated registers */
 static struct regs_t regs;
@@ -3952,6 +3953,21 @@ ruu_dispatch(void)
 					tc[trace_cache_line_index].pc[trace_index] = regs.regs_PC;
 					trace_index++;
 					start_of_trace = 0;
+					
+				  /*TU add this branch info*/
+				  if((MD_OP_FLAGS(op) & (F_CTRL|F_DIRJMP)) == (F_CTRL|F_DIRJMP))
+				  {
+				  		tc[trace_cache_line_index].flags[index_of_next_branch] = br_taken;
+				  		tc[trace_cache_line_index].b_pc[index_of_next_branch] = regs.regs_PC;
+				  		tc[trace_cache_line_index].mask++;
+					  	index_of_next_branch++;
+				  		if(tc[trace_cache_line_index].n_insts - 1 == INSTS_PER_TRACE)
+				  		{
+					  		tc[trace_cache_line_index].fall_addr = regs.regs_PC + sizeof(md_inst_t);
+					  		tc[trace_cache_line_index].target_addr = regs.regs_NPC;
+					  		index_of_next_branch = 0;
+					  	}
+					}
 				}
       	}
       }		
@@ -3969,25 +3985,10 @@ ruu_dispatch(void)
              the updates to the fetch values at the end of this function.  If
              case #2, also charge a mispredict penalty for redirecting fetch */
 	  fetch_pred_PC = fetch_regs_PC = regs.regs_NPC;
-	  
-	  /*TU trace being formed add this branch info*/
-	  if(trace_being_formed)
-	  {
-	  		tc[trace_cache_line_index].flags[index_of_next_branch] = br_taken;
-	  		tc[trace_cache_line_index].b_pc[index_of_next_branch] = regs.regs_PC;
-	  		tc[trace_cache_line_index].mask++;
-		  	index_of_next_branch++;
-	  		if(tc[trace_cache_line_index].n_insts - 1 == INSTS_PER_TRACE)
-	  		{
-		  		tc[trace_cache_line_index].fall_addr = regs.regs_PC + sizeof(md_inst_t);
-		  		tc[trace_cache_line_index].target_addr = regs.regs_NPC;
-		  		index_of_next_branch = 0;
-		  	}
-     }
      
 	  /*TU stop using trace cache if bad prediction in trace cache*/
 	  if(using_trace_cache && tc[trace_cache_line_index].flags[index_of_next_branch++] != br_taken)
-	  	trace_index = using_trace_cache = 0;
+	  	trace_index = using_trace_cache = keep_using_trace_cache = 0;
 	  
 	  /* was: if (pred_perfect) */
 	  if (pred_perfect)
@@ -4342,9 +4343,10 @@ ruu_fetch(void)
 		if(!trace_being_formed && using_trace_cache)
 		{
 			//Right now adding hit to I$1, maybe should keep trace stats ??//
-			cache_il1->hits++;
-			
-			
+			cache_il1->hits++;			
+			keep_using_trace_cache--;
+			if(!keep_using_trace_cache)
+				using_trace_cache = 0;
 		}
 		//sim stuff, not TU//
 		else
@@ -4767,8 +4769,13 @@ int search_tc()
 					return -1;				
 			}
 			using_trace_cache = 1;
-			trace_being_formed = 0;
-			tc[trace_cache_line_index].valid = 0;
+			keep_using_trace_cache = tc[i].n_insts;
+			if(trace_being_formed)
+			{
+				trace_being_formed = 0;
+				if(trace_cache_line_index >= 0)
+					tc[trace_cache_line_index].valid = 0;
+			}
 			return i;	
 		}
 	//}

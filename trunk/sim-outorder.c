@@ -50,8 +50,8 @@
  */
 
 /*TU*/
-#define TRACE_RATIO 			8
-#define INSTS_PER_TRACE 	8
+#define TRACE_RATIO 			2
+#define INSTS_PER_TRACE 	2
 #define TRACE_CACHE_SIZE	1048
 
 #include <stdio.h>
@@ -113,6 +113,7 @@ static int trace_index = 0;					//index in TC[].pc of block using
 static int trace_cache_line_index = 0;	//index in TC[index] of line
 static int index_of_next_branch = 0;		//index of next branch in tc.flags and tc.b_pc
 static int count_to_next_trace = 0; 		//count down to build next trace
+static int start_of_trace = 1;			//whether this is beginning of trace or not
 
 /* simulated registers */
 static struct regs_t regs;
@@ -3925,13 +3926,16 @@ ruu_dispatch(void)
       	{
       		if(trace_cache_line_index < 0)
       			trace_cache_line_index = 0;
-      		if(count_to_next_trace < 0)
+      		if(start_of_trace)
       		{
       			trace_cache_line_index = regs.regs_PC % TRACE_CACHE_SIZE;
+      			trace_index = 0;
 		   		count_to_next_trace = TRACE_RATIO;
+		   		tc[trace_cache_line_index].n_insts = 0;
 		   	}
-      		if(tc[trace_cache_line_index].n_insts > INSTS_PER_TRACE - 1)
+      		if(!start_of_trace && tc[trace_cache_line_index].n_insts > INSTS_PER_TRACE - 1)
       		{
+      			start_of_trace = 1;
       			trace_being_formed = 0;
       			index_of_next_branch = 0;
       			trace_cache_line_index = 0;
@@ -3945,6 +3949,7 @@ ruu_dispatch(void)
 					tc[trace_cache_line_index].n_insts++;
 					tc[trace_cache_line_index].pc[trace_index] = regs.regs_PC;
 					trace_index++;
+					start_of_trace = 0;
 				}
       	}
       }		
@@ -4329,7 +4334,7 @@ ruu_fetch(void)
 		
 		//get trace line TU//
 		if(!using_trace_cache && !trace_being_formed)
-			trace_cache_line_index = search_tc(fetch_regs_PC, TRACE_CACHE_SIZE);
+			trace_cache_line_index = search_tc();
 		
 		//check that we should fetch from trace cache otherwise get inst from cache TU//
 		if(!trace_being_formed && using_trace_cache)
@@ -4429,11 +4434,11 @@ ruu_fetch(void)
 	}
       else
 	{
-	  /* no predictor, just default to predict not taken, and
-	     continue fetching instructions linearly *
-	  fetch_pred_PC = fetch_regs_PC + sizeof(md_inst_t);
-	}
     End of pred removal TU*/
+	 /*  no predictor, just default to predict not taken, and
+	     continue fetching instructions linearly */
+	  fetch_pred_PC = fetch_regs_PC + sizeof(md_inst_t);
+	  
       /* commit this instruction to the IFETCH -> DISPATCH queue */
       if(using_trace_cache)
       	fetch_data[fetch_tail].dir_update = tc[trace_cache_line_index].dir_update[index_of_next_branch];
@@ -4730,16 +4735,17 @@ sim_main(void)
 }
 
 /*TU returns index in trace cache where pc can be found*/
-int search_tc(int PC, int size)
+int search_tc()
 {
 	int i, j;// prediction
 	enum md_opcode op;
 	md_inst_t inst;
 	md_addr_t pred_PC;
 	
-//	for(i = 0; i < size; i++)
+//	for(i = 0; i < size; i++) TU since it is direct mapped don't need to search all ???
 //	{
-		if(tc[i].valid && PC == tc[i].pc[0])
+	i = fetch_regs_PC % TRACE_CACHE_SIZE;
+		if(tc[i].valid && fetch_regs_PC == tc[i].pc[0])
 		{
 			//search all branches//
 			for(j = 0; j < tc[i].mask; j++)
@@ -4761,7 +4767,7 @@ int search_tc(int PC, int size)
 			using_trace_cache = 1;
 			return i;	
 		}
-	}
+	//}
 	
 	return -1;
 }

@@ -53,6 +53,7 @@
 #define TRACE_RATIO 			8
 #define INSTS_PER_TRACE 	8
 #define TRACE_CACHE_SIZE	128
+#define WRITE_TRACE_FILE   "TraceResults.txt"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -112,6 +113,7 @@ static struct TraceCache build_buffer;
 static struct TraceCache *tc;
 
 /*trace setting variables TU*/
+static FILE *fp;
 static unsigned int tracehit = 0;
 static int trace_being_formed = 0;  		//0 not building trace, 1 building trace
 static int using_trace_cache = 0;		//0 fetch from I$, 1 fetch from TC
@@ -298,6 +300,7 @@ void trace_init()
 	int i, j;
 	
 	tc = malloc(TRACE_CACHE_SIZE * sizeof(struct TraceCache));
+	fp = fopen(WRITE_TRACE_FILE, "w");
 	
 	for(i = 0; i < TRACE_CACHE_SIZE; i++)
 	{
@@ -4787,7 +4790,7 @@ sim_main(void)
 
       /* call instruction fetch unit if it is not blocked */
       if (!ruu_fetch_issue_delay)
-	ruu_fetch();
+			ruu_fetch();
       else
 	ruu_fetch_issue_delay--;
 
@@ -4802,8 +4805,9 @@ sim_main(void)
       /* go to next cycle */
       sim_cycle++;
 
-		if(!(tracehit % 1000))
-      	printf("Trace Hits: %d\n", tracehit);
+		//if(!(tracehit % 500))
+   	// 	fprintf(fp, "Trace Hits: %d\n", tracehit);    
+    
       /* finish early? */
       if (max_insts && sim_num_insn >= max_insts)
       {

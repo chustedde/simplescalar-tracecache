@@ -50,11 +50,11 @@
  */
 
 /*TU*/
-#define TRACE_RATIO 			16
 #define INSTS_PER_TRACE 	8
-#define TRACE_CACHE_SIZE	128
+#define TRACE_CACHE_SIZE	32
 #define TRACE_WRITE_FILE   "TraceResults.txt"
 #define BAD_TRACE_THRESHOLD  8
+#define TRACE_RATIO 		10 * INSTS_PER_TRACE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -3928,7 +3928,7 @@ ruu_dispatch(void)
 	  /* no EXPR */
 	}
       /* operation sets next PC */
-
+      
       /* print retirement trace if in verbose mode */
       if (!spec_mode && verbose)
         {
@@ -4317,7 +4317,7 @@ ruu_dispatch(void)
       fetch_num--;
 
       /* check for DLite debugger entry condition */
-      made_check = TRUE;
+     made_check = TRUE;
       if (dlite_check_break(pred_PC,
 			    is_write ? ACCESS_WRITE : ACCESS_READ,
 			    addr, sim_num_insn, sim_cycle))
@@ -4325,8 +4325,8 @@ ruu_dispatch(void)
     }
 
   /* need to enter DLite at least once per cycle */
-  if (!made_check)
-    {
+	  if (!made_check)
+	  {
       if (dlite_check_break(/* no next PC */0,
 			    is_write ? ACCESS_WRITE : ACCESS_READ,
 			    addr, sim_num_insn, sim_cycle))
@@ -4418,7 +4418,7 @@ ruu_fetch(void)
       /* TU get from trace cache if using*/
       if(using_pc_index < INSTS_PER_TRACE && using_trace_cache)
       {
-      	fetch_regs_PC = tc[tc_using_index].pc[++using_pc_index];
+      	fetch_regs_PC = tc[tc_using_index].pc[using_pc_index++];
       	if(using_pc_index >= INSTS_PER_TRACE)
       		using_trace_cache = 0;
       }
@@ -4427,7 +4427,7 @@ ruu_fetch(void)
       	using_pc_index = 0;
 	      fetch_regs_PC = fetch_pred_PC;
 	   }
-
+	   
       /* is this a bogus text address? (can happen on mis-spec path) */
       if (ld_text_base <= fetch_regs_PC
 	  && fetch_regs_PC < (ld_text_base+ld_text_size)
@@ -4443,9 +4443,9 @@ ruu_fetch(void)
 		//check that we should fetch from trace cache otherwise get inst from cache TU//
 		if(!trace_being_formed && using_trace_cache)
 		{
-			//Right now adding hit to I$1, maybe should keep trace stats ??//
+			//Right now adding hit to I$1, maybe should keep trace stats ?? TU//
 //			cache_il1->hits++;			
-	tracehit++;
+		tracehit++;
 			keep_using_trace_cache--;
 			if(!keep_using_trace_cache)
 				using_trace_cache = 0;
@@ -4760,10 +4760,10 @@ sim_main(void)
 	    }
 
 	  /* check for DLite debugger entry condition */
-	  if (dlite_check_break(regs.regs_NPC,
+/*TU remove	  if (dlite_check_break(regs.regs_NPC,
 				is_write ? ACCESS_WRITE : ACCESS_READ,
 				addr, sim_num_insn, sim_num_insn))
-	    dlite_main(regs.regs_PC, regs.regs_NPC, sim_num_insn, &regs, mem);
+	    dlite_main(regs.regs_PC, regs.regs_NPC, sim_num_insn, &regs, mem);*/
 
 	  /* go to the next instruction */
 	  regs.regs_PC = regs.regs_NPC;
@@ -4851,7 +4851,8 @@ sim_main(void)
       /* go to next cycle */
       sim_cycle++;
 
-     	fprintf(fp, "Trace Hits: %d\n", tracehit);
+//TU print trace hits to file//
+//     	fprintf(fp, "Trace Hits: %d\n", tracehit);
       /* finish early? */
       if (max_insts && sim_num_insn >= max_insts)
       {
@@ -4940,6 +4941,7 @@ int search_tc()
 		using_trace_cache = 1;
 		keep_using_trace_cache = tc[i].n_insts;
 		index_of_next_branch = 0;
+		using_pc_index = 1;
 		for(j = 0; j < INSTS_PER_TRACE; j++)
 			tc[i].stack_recover_idx[j] = stack_rec_idx[j];
 		if(trace_being_formed)

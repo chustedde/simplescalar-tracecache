@@ -4549,11 +4549,11 @@ ruu_fetch(void)
 			   /* RSB index */&stack_recover_idx);
 			   
 		 //TU if using the trace cache make sure prediction matches trace, otherwise end trace//
-	    if(using_trace_cache && fetch_pred_PC != tc[tc_using_index].pred_pc[index_of_next_branch])
-	    {
-	    	using_trace_cache = 0;
-	    	using_pc_index = 0;
-	    }
+//	    if(using_trace_cache && fetch_pred_PC != tc[tc_using_index].pred_pc[index_of_next_branch])
+//	    {
+//	    	using_trace_cache = 0;
+//	    	using_pc_index = 0;
+//	    }
 	  }
 	  else
 	    fetch_pred_PC = 0;
@@ -4915,9 +4915,9 @@ int search_tc()
 //	int stack_rec_idx[INSTS_PER_TRACE];
 	
 	directory_ptr = malloc(1 * sizeof(struct bpred_update_t *));
-	
-	for(i = 0; i < INSTS_PER_TRACE; i++)
-		stack_rec_idx[i] = 0;
+	//TU remove
+//	for(i = 0; i < INSTS_PER_TRACE; i++)
+//		stack_rec_idx[i] = 0;
 		
 	i = fetch_regs_PC % TRACE_CACHE_SIZE;
 	if(tc[i].valid && fetch_regs_PC == tc[i].pc[0])
@@ -5039,8 +5039,9 @@ int search_tc()
 		keep_using_trace_cache = tc[i].n_insts;
 		index_of_next_branch = 0;
 		using_pc_index = 0;
-		for(j = 0; j < INSTS_PER_TRACE; j++)
-			tc[i].stack_recover_idx[j] = stack_rec_idx[j];
+		//TU remove 
+	//	for(j = 0; j < INSTS_PER_TRACE; j++)
+	//		tc[i].stack_recover_idx[j] = stack_rec_idx[j];
 		if(trace_being_formed)
 		{
 			trace_being_formed = 0;

@@ -3105,8 +3105,12 @@ tracer_recover(void)
   fetch_num = 0;
   fetch_tail = fetch_head = 0;
   fetch_pred_PC = fetch_regs_PC = recover_PC;
-  using_trace_cache = 0;
-  using_pc_index = 0;
+  if(using_trace_cache)
+  {
+  		using_trace_cache = 0;
+  		using_pc_index = 0;
+  		index_of_next_branch = 0;
+  }
 }
 
 /* initialize the speculative instruction state generator state */
@@ -3982,9 +3986,13 @@ ruu_dispatch(void)
       			tc_build_index = 0;
       		if(start_of_trace)
       		{
+      		//TU remove
+      		if(regs.regs_PC == 483330092)
+      			regs.regs_PC = 483330092;
       			clearBuildBuffer();
       			tc_build_index = regs.regs_PC % TRACE_CACHE_SIZE;
       			forming_pc_index = 0;
+      			tc[tc_build_index].mask = 0;
 		   		count_to_next_trace = TRACE_RATIO;
 		   		build_buffer.n_insts = 0;
 		   		prev_branch_was_taken = -1;
@@ -3998,6 +4006,8 @@ ruu_dispatch(void)
 		   		target_prev_taken_branch = 0;
       			start_of_trace = 1;
       			trace_being_formed = 0;
+      			tc[tc_build_index].mask = 0;
+      			tc[tc_build_index].n_insts = 0;
       			index_of_next_branch = 0;
       			tc_build_index = 0;
       			forming_pc_index = 0;
@@ -4047,7 +4057,7 @@ ruu_dispatch(void)
 						start_of_trace = 0;
 					
 					  /*TU add this branch info*/
-					  if((MD_OP_FLAGS(op) & (F_CTRL|F_DIRJMP)) == (F_CTRL|F_DIRJMP))
+					  if(MD_OP_FLAGS(op) & F_CTRL)
 					  {
 					  		build_buffer.flags[index_of_next_branch] = br_taken;
 					  		prev_branch_was_taken = br_taken;
@@ -4092,6 +4102,7 @@ ruu_dispatch(void)
 		using_pc_index = 0;
 		using_trace_cache = keep_using_trace_cache = 0;
 		}
+		
 	  
 	  /* was: if (pred_perfect) */
 	  if (pred_perfect)
@@ -4445,8 +4456,8 @@ ruu_fetch(void)
 	    //  	using_trace_cache = 0;
 	    //  }
 	      fetch_regs_PC = fetch_pred_PC;
-	      if(sim_cycle == 4607)
-	      	sim_cycle = 4607;
+	      if(sim_cycle == 6502)
+	      	sim_cycle = 6502;
 	      //TU remove//
 	      fprintf(fp,"PC\t%llu\n",fetch_regs_PC);
 //	   }
@@ -4549,11 +4560,11 @@ ruu_fetch(void)
 			   /* RSB index */&stack_recover_idx);
 			   
 		 //TU if using the trace cache make sure prediction matches trace, otherwise end trace//
-//	    if(using_trace_cache && fetch_pred_PC != tc[tc_using_index].pred_pc[index_of_next_branch])
-//	    {
-//	    	using_trace_cache = 0;
-//	    	using_pc_index = 0;
-//	    }
+	    if(using_trace_cache && MD_IS_RETURN(op) && pred->retstack.size)
+	    {
+	    	using_trace_cache = 0;
+	    	using_pc_index = 0;
+	    }
 	  }
 	  else
 	    fetch_pred_PC = 0;
@@ -4598,7 +4609,6 @@ ruu_fetch(void)
 		else
       {
       	fetch_data[fetch_tail].pred_PC = fetch_pred_PC;
-     		fetch_data[fetch_tail].stack_recover_idx = stack_recover_idx;
       }
       fetch_data[fetch_tail].IR = inst;
       fetch_data[fetch_tail].regs_PC = fetch_regs_PC;
@@ -5048,9 +5058,14 @@ int search_tc()
   			prev_branch_was_taken = -1;
   			count_bad_trace = BAD_TRACE_THRESHOLD;
   			target_prev_taken_branch = 0;
+  			start_of_trace = 1;
   			forming_pc_index = 0;
 			if(tc_build_index >= 0)
+			{
+				tc[tc_build_index].mask = 0;
+				tc[tc_build_index].n_insts = 0;
 				tc[tc_build_index].valid = 0;
+			}
 		}
 		return i;	
 	}

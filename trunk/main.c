@@ -211,8 +211,8 @@ sim_print_stats(FILE *fd)		/* output stream */
   stat_print_stats(sim_sdb, fd);
   sim_aux_stats(fd);
   fprintf(fd, "\n");
-  //TU remove
-  fprintf(myfp, "tb\t%d\nth\t%d\ttr%d\n", trace_build_cnt, tracehit, trace_replaced);
+  //TU Print trace stats
+  fprintf(myfp, "trace builds:\t%d\ntrace hits\t%d\ntrace replacements:\t%d\n", trace_build_cnt, tracehit, trace_replaced);
 }
 
 /* print stats, uninitialize simulator components, and exit w/ exitcode */
@@ -235,7 +235,7 @@ main(int argc, char **argv, char **envp)
   char *s;
   int i, exit_code;
 
-myfp = fopen("tracebuild.txt","w");
+myfp = fopen("tracebuildstats.txt","w");
 
 #ifndef _MSC_VER
   /* catch SIGUSR1 and dump intermediate stats */
